@@ -83,6 +83,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		getBookmarks().then(sendResponse);
 		return true;
 	}
+
+	if (message.type === "pause-bookmark") {
+		pauseBookmark(message.bookmarkId).then(sendResponse);
+		return true;
+	}
+
+	if (message.type === "resume-bookmark") {
+		resumeBookmark(message.bookmarkId).then(sendResponse);
+		return true;
+	}
+
+	if (message.type === "set-poll-interval") {
+		setPollInterval(message.bookmarkId, message.hours).then(sendResponse);
+		return true;
+	}
+
+	if (message.type === "check-now") {
+		pollBookmark(message.bookmarkId).then(() =>
+			sendResponse({ success: true }),
+		);
+		return true;
+	}
+
+	if (message.type === "get-diff") {
+		getDiffResult(message.bookmarkId).then(sendResponse);
+		return true;
+	}
+
+	if (message.type === "mark-diff-read") {
+		markDiffRead(message.bookmarkId).then(sendResponse);
+		return true;
+	}
+
+	if (message.type === "update-settings") {
+		updateSettings(message.settings).then(sendResponse);
+		return true;
+	}
 });
 
 // ── Core functions ─────────────────────────────────────────────────
@@ -292,6 +329,131 @@ async function getBookmarks() {
 	const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
 		await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
 	return bookmarks;
+}
+
+/**
+ * Pause a bookmark — stop polling.
+ * @param {string} bookmarkId
+ */
+async function pauseBookmark(bookmarkId) {
+	try {
+		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
+			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
+		const bookmark = bookmarks.find((b) => b.id === bookmarkId);
+		if (!bookmark) return { success: false };
+
+		bookmark.paused = true;
+		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
+		await chrome.alarms.clear(`poll_${bookmarkId}`);
+		return { success: true };
+	} catch (err) {
+		console.error("[PDB] pauseBookmark error:", err);
+		return { success: false };
+	}
+}
+
+/**
+ * Resume a bookmark — restart polling.
+ * @param {string} bookmarkId
+ */
+async function resumeBookmark(bookmarkId) {
+	try {
+		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
+			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
+		const bookmark = bookmarks.find((b) => b.id === bookmarkId);
+		if (!bookmark) return { success: false };
+
+		bookmark.paused = false;
+		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
+		registerAlarm(bookmarkId, bookmark.pollIntervalHours);
+		return { success: true };
+	} catch (err) {
+		console.error("[PDB] resumeBookmark error:", err);
+		return { success: false };
+	}
+}
+
+/**
+ * Change a bookmark's poll interval.
+ * @param {string} bookmarkId
+ * @param {number} hours
+ */
+async function setPollInterval(bookmarkId, hours) {
+	try {
+		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
+			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
+		const bookmark = bookmarks.find((b) => b.id === bookmarkId);
+		if (!bookmark) return { success: false };
+
+		bookmark.pollIntervalHours = hours;
+		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
+
+		if (!bookmark.paused) {
+			await chrome.alarms.clear(`poll_${bookmarkId}`);
+			registerAlarm(bookmarkId, hours);
+		}
+		return { success: true };
+	} catch (err) {
+		console.error("[PDB] setPollInterval error:", err);
+		return { success: false };
+	}
+}
+
+/**
+ * Get a diff result from storage.
+ * @param {string} bookmarkId
+ */
+async function getDiffResult(bookmarkId) {
+	try {
+		const key = `${STORAGE_KEYS.diffPrefix}${bookmarkId}`;
+		const data = await chrome.storage.local.get(key);
+		return data[key] || null;
+	} catch (err) {
+		console.error("[PDB] getDiffResult error:", err);
+		return null;
+	}
+}
+
+/**
+ * Mark a bookmark's diff as read.
+ * @param {string} bookmarkId
+ */
+async function markDiffRead(bookmarkId) {
+	try {
+		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
+			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
+		const bookmark = bookmarks.find((b) => b.id === bookmarkId);
+		if (!bookmark) return { success: false };
+
+		bookmark.hasUnreadDiff = false;
+		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
+		await updateBadge(bookmarks);
+		return { success: true };
+	} catch (err) {
+		console.error("[PDB] markDiffRead error:", err);
+		return { success: false };
+	}
+}
+
+/**
+ * Update global settings.
+ * @param {object} newSettings — partial settings to merge
+ */
+async function updateSettings(newSettings) {
+	try {
+		const { [STORAGE_KEYS.settings]: current = DEFAULT_SETTINGS } =
+			await chrome.storage.local.get(STORAGE_KEYS.settings);
+		const merged = { ...current, ...newSettings };
+		await chrome.storage.local.set({ [STORAGE_KEYS.settings]: merged });
+
+		// Reapply badge visibility
+		const bookmarks = await getBookmarks();
+		await updateBadge(bookmarks);
+		return { success: true };
+	} catch (err) {
+		console.error("[PDB] updateSettings error:", err);
+		return { success: false };
+	}
 }
 
 // ── Polling engine ─────────────────────────────────────────────────

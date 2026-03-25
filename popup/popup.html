@@ -8,15 +8,17 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      width: 380px;
+      width: 400px;
       min-height: 200px;
-      max-height: 520px;
+      max-height: 560px;
       font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       font-size: 13px;
       color: #1a1a1a;
       background: #fafafa;
       overflow-y: auto;
     }
+
+    /* ── Header ─────────────────────────────────── */
 
     .header {
       display: flex;
@@ -41,6 +43,8 @@
       gap: 6px;
     }
 
+    /* ── Buttons ─────────────────────────────────── */
+
     .btn {
       display: inline-flex;
       align-items: center;
@@ -58,6 +62,8 @@
 
     .btn:hover { background: #f0f0f0; border-color: #bbb; }
     .btn:active { background: #e5e5e5; }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .btn:disabled:hover { background: #fff; border-color: #d4d4d4; }
 
     .btn-primary {
       background: #1a1a1a;
@@ -66,13 +72,43 @@
     }
 
     .btn-primary:hover { background: #333; }
+    .btn-primary:disabled:hover { background: #1a1a1a; }
 
-    .btn-danger {
-      color: #dc2626;
-      border-color: #fca5a5;
+    .btn-sm {
+      padding: 3px 7px;
+      font-size: 11px;
+      border-radius: 5px;
     }
 
-    .btn-danger:hover { background: #fef2f2; border-color: #dc2626; }
+    .btn-diff {
+      color: #15803d;
+      border-color: #86efac;
+      font-weight: 600;
+    }
+
+    .btn-diff:hover { background: #f0fdf4; border-color: #15803d; }
+
+    .btn-icon {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      font-size: 13px;
+      color: #999;
+      transition: all 0.15s;
+      padding: 0;
+    }
+
+    .btn-icon:hover { background: #f0f0f0; color: #666; border-color: #e0e0e0; }
+    .btn-icon.delete:hover { background: #fef2f2; color: #dc2626; border-color: #fca5a5; }
+    .btn-icon.settings:hover { background: #f0f0f0; color: #333; }
+
+    /* ── Empty state ────────────────────────────── */
 
     .empty-state {
       display: flex;
@@ -103,26 +139,32 @@
       max-width: 240px;
     }
 
-    .bookmark-list {
-      list-style: none;
-    }
+    /* ── Bookmark list ──────────────────────────── */
+
+    .bookmark-list { list-style: none; }
 
     .bookmark-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      padding: 12px 16px;
+      padding: 10px 16px;
       border-bottom: 1px solid #f0f0f0;
+      border-left: 3px solid transparent;
       transition: background 0.1s;
     }
 
-    .bookmark-item:hover { background: #f5f5f5; }
+    .bookmark-item:hover { background: #f8f8f8; }
+    .bookmark-item.unread { border-left-color: #E53E3E; }
+    .bookmark-item.paused { opacity: 0.55; }
+
+    .bookmark-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
 
     .bookmark-favicon {
-      width: 20px;
-      height: 20px;
-      border-radius: 4px;
-      margin-top: 1px;
+      width: 18px;
+      height: 18px;
+      border-radius: 3px;
+      margin-top: 2px;
       flex-shrink: 0;
       background: #e5e5e5;
       object-fit: contain;
@@ -154,33 +196,104 @@
     .bookmark-meta {
       font-size: 11px;
       color: #aaa;
-      margin-top: 3px;
+      margin-top: 2px;
     }
 
-    .bookmark-actions {
-      flex-shrink: 0;
+    .bookmark-controls {
       display: flex;
-      gap: 4px;
       align-items: center;
+      gap: 5px;
+      margin-top: 7px;
+      padding-left: 28px;
     }
 
-    .btn-icon {
-      width: 28px;
-      height: 28px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid transparent;
-      border-radius: 6px;
-      background: transparent;
+    .interval-select {
+      font-size: 11px;
+      padding: 2px 4px;
+      border: 1px solid #d4d4d4;
+      border-radius: 4px;
+      background: #fff;
+      color: #555;
       cursor: pointer;
-      font-size: 14px;
-      color: #999;
-      transition: all 0.15s;
     }
 
-    .btn-icon:hover { background: #f0f0f0; color: #666; border-color: #e0e0e0; }
-    .btn-icon.delete:hover { background: #fef2f2; color: #dc2626; border-color: #fca5a5; }
+    .interval-select:hover { border-color: #bbb; }
+
+    /* ── Settings panel ─────────────────────────── */
+
+    .settings-panel { display: none; }
+
+    .settings-panel.visible { display: block; }
+
+    .settings-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid #e5e5e5;
+      background: #fff;
+    }
+
+    .settings-header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .settings-body {
+      padding: 12px 16px;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .setting-row:last-child { border-bottom: none; }
+
+    .setting-label {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .setting-desc {
+      font-size: 11px;
+      color: #999;
+      margin-top: 1px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      border: none;
+      border-radius: 10px;
+      background: #d4d4d4;
+      cursor: pointer;
+      transition: background 0.2s;
+      padding: 0;
+    }
+
+    .toggle.on { background: #1a1a1a; }
+
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+    }
+
+    .toggle.on::after { transform: translateX(16px); }
+
+    /* ── Toast ──────────────────────────────────── */
 
     .toast {
       position: fixed;
@@ -206,20 +319,61 @@
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>DiffBookmark</h1>
-    <div class="header-actions">
-      <button class="btn btn-primary" id="track-btn">+ Track Page</button>
+  <!-- Main view -->
+  <div id="main-view">
+    <div class="header">
+      <h1>DiffBookmark</h1>
+      <div class="header-actions">
+        <button class="btn-icon settings" id="settings-btn" title="Settings">&#9881;</button>
+        <button class="btn btn-primary" id="track-btn">+ Track</button>
+      </div>
+    </div>
+
+    <div class="empty-state" id="empty-state">
+      <div class="icon">&#916;</div>
+      <h2>No pages tracked yet</h2>
+      <p>Right-click any page and select "Track this page", or click the button above.</p>
+    </div>
+
+    <ul class="bookmark-list" id="bookmark-list"></ul>
+  </div>
+
+  <!-- Settings view -->
+  <div class="settings-panel" id="settings-panel">
+    <div class="settings-header">
+      <button class="btn-icon" id="settings-back" title="Back">&#8592;</button>
+      <h2>Settings</h2>
+    </div>
+    <div class="settings-body">
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Default poll interval</div>
+          <div class="setting-desc">For new bookmarks</div>
+        </div>
+        <select class="interval-select" id="setting-interval">
+          <option value="1">1h</option>
+          <option value="3">3h</option>
+          <option value="6" selected>6h</option>
+          <option value="12">12h</option>
+          <option value="24">24h</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Notifications</div>
+          <div class="setting-desc">OS alerts on change</div>
+        </div>
+        <button class="toggle on" id="setting-notifications"></button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Badge count</div>
+          <div class="setting-desc">Unread count on icon</div>
+        </div>
+        <button class="toggle on" id="setting-badge"></button>
+      </div>
     </div>
   </div>
-
-  <div class="empty-state" id="empty-state">
-    <div class="icon">&#916;</div>
-    <h2>No pages tracked yet</h2>
-    <p>Right-click any page and select "Track this page", or click the button above.</p>
-  </div>
-
-  <ul class="bookmark-list" id="bookmark-list"></ul>
 
   <div class="toast" id="toast"></div>
 

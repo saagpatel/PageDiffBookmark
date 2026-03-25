@@ -6,25 +6,166 @@
   <title>Diff Viewer — Page DiffBookmark</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
       font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       font-size: 14px;
       color: #1a1a1a;
       background: #fafafa;
-      padding: 16px;
     }
-    .placeholder {
+
+    .header {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid #e5e5e5;
+      background: #fff;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .header-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .header-title a {
+      color: #1a1a1a;
+      text-decoration: none;
+    }
+
+    .header-title a:hover { text-decoration: underline; }
+
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .stat-added {
+      color: #15803d;
+      font-weight: 600;
+    }
+
+    .stat-removed {
+      color: #dc2626;
+      font-weight: 600;
+    }
+
+    .header-actions {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 12px;
+      border: 1px solid #d4d4d4;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      color: #333;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .btn:hover { background: #f0f0f0; border-color: #bbb; }
+
+    .btn-primary {
+      background: #1a1a1a;
+      color: #fff;
+      border-color: #1a1a1a;
+    }
+
+    .btn-primary:hover { background: #333; }
+
+    .diff-content {
+      padding: 20px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-size: 13.5px;
+      max-width: 100%;
+    }
+
+    .diff-content ins {
+      background: #dcfce7;
+      color: #15803d;
+      text-decoration: none;
+      padding: 1px 3px;
+      border-radius: 2px;
+    }
+
+    .diff-content del {
+      background: #fee2e2;
+      color: #dc2626;
+      text-decoration: line-through;
+      padding: 1px 3px;
+      border-radius: 2px;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 64px 24px;
       text-align: center;
-      padding: 48px 16px;
-      color: #999;
+    }
+
+    .empty-state .icon {
+      font-size: 36px;
+      margin-bottom: 12px;
+      opacity: 0.3;
+    }
+
+    .empty-state h2 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 6px;
+    }
+
+    .empty-state p {
+      font-size: 13px;
+      color: #888;
+      line-height: 1.5;
+      max-width: 280px;
     }
   </style>
 </head>
 <body>
-  <div class="placeholder">
-    <p>No diff to display.</p>
-    <p style="margin-top: 8px; font-size: 12px;">Track a page and wait for changes to appear here.</p>
+  <div id="diff-view" style="display: none;">
+    <div class="header">
+      <div class="header-title" id="diff-title"></div>
+      <div class="header-meta">
+        <span class="stat-added" id="stat-added"></span>
+        <span class="stat-removed" id="stat-removed"></span>
+        <span id="diff-time"></span>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" id="mark-read-btn">Mark as read</button>
+      </div>
+    </div>
+    <div class="diff-content" id="diff-body"></div>
   </div>
+
+  <div class="empty-state" id="empty-state">
+    <div class="icon">&#916;</div>
+    <h2>No diff to display</h2>
+    <p>Track a page and wait for changes, then click "View Diff" from the popup or a notification.</p>
+  </div>
+
   <script src="side-panel.js"></script>
 </body>
 </html>
