@@ -1,6 +1,6 @@
 /* global diff_match_patch */
 
-importScripts("../lib/diff-match-patch.js");
+importScripts("lib/diff-match-patch.js");
 
 // ── Dev helpers (disable before shipping) ──────────────────────────
 const DEV_POLL_INTERVAL_MINUTES = 1;
@@ -41,7 +41,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: [] });
 	}
 
-	// Create context menu
+	// Clear existing menu items (prevents duplicate error on reload/update)
+	await chrome.contextMenus.removeAll();
 	chrome.contextMenus.create({
 		id: "track-page",
 		title: "Track this page",
@@ -184,16 +185,16 @@ async function trackPage(tab) {
  */
 async function injectAndExtract(tabId) {
 	try {
-		// Inject Readability.js first
+		// Inject Readability.js first so it's available in the page context
 		await chrome.scripting.executeScript({
 			target: { tabId },
 			files: ["lib/Readability.js"],
 		});
 
-		// Then inject content script and get result
+		// Use func (not files) so Chrome properly awaits the async return value
 		const results = await chrome.scripting.executeScript({
 			target: { tabId },
-			files: ["content/content-script.js"],
+			func: extractPageContent,
 		});
 
 		const result = results?.[0]?.result;
@@ -202,6 +203,42 @@ async function injectAndExtract(tabId) {
 	} catch (err) {
 		console.error("[PDB] injectAndExtract error:", err);
 		return null;
+	}
+}
+
+/**
+ * Runs in the page context via chrome.scripting.executeScript({ func }).
+ * Readability.js must be injected before this runs.
+ */
+async function extractPageContent() {
+	// 500ms delay for SPA resilience — let dynamic content finish rendering
+	await new Promise((resolve) => setTimeout(resolve, 500));
+
+	try {
+		const docClone = document.cloneNode(true);
+		// Pass documentURI so Readability can resolve relative URLs correctly
+		const reader = new Readability(docClone, { url: location.href });
+		const article = reader.parse();
+
+		let title = document.title;
+		let textContent = "";
+
+		if (article?.textContent?.trim().length > 0) {
+			title = article.title || document.title;
+			textContent = article.textContent.trim();
+		} else {
+			// Fallback: raw innerText (noisier but always works)
+			textContent = document.body.innerText.trim();
+		}
+
+		return { title, textContent, url: location.href };
+	} catch {
+		// Fallback on any Readability error
+		return {
+			title: document.title,
+			textContent: document.body.innerText.trim(),
+			url: location.href,
+		};
 	}
 }
 

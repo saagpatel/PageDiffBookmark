@@ -14,18 +14,23 @@ trackBtn.addEventListener("click", async () => {
 	trackBtn.disabled = true;
 	trackBtn.textContent = "Tracking...";
 
-	const response = await chrome.runtime.sendMessage({
-		type: "track-current-page",
-	});
+	try {
+		const response = await chrome.runtime.sendMessage({
+			type: "track-current-page",
+		});
 
-	trackBtn.disabled = false;
-	trackBtn.textContent = "+ Track Page";
-
-	if (response?.success) {
-		showToast("Page tracked!");
-		await renderBookmarks();
-	} else {
-		showToast(response?.error || "Failed to track page");
+		if (response?.success) {
+			showToast("Page tracked!");
+			await renderBookmarks();
+		} else {
+			showToast(response?.error || "Failed to track page");
+		}
+	} catch (err) {
+		console.error("[PDB Popup] track error:", err);
+		showToast("Failed to track page");
+	} finally {
+		trackBtn.disabled = false;
+		trackBtn.textContent = "+ Track Page";
 	}
 });
 
@@ -39,7 +44,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // ── Rendering ──────────────────────────────────────────────────────
 
 async function renderBookmarks() {
-	const bookmarks = await chrome.runtime.sendMessage({ type: "get-bookmarks" });
+	let bookmarks;
+	try {
+		bookmarks = await chrome.runtime.sendMessage({ type: "get-bookmarks" });
+	} catch (err) {
+		console.error("[PDB Popup] get-bookmarks error:", err);
+		bookmarks = [];
+	}
 
 	if (!bookmarks || bookmarks.length === 0) {
 		emptyState.style.display = "flex";
@@ -82,12 +93,17 @@ async function renderBookmarks() {
 		btn.addEventListener("click", async (e) => {
 			e.stopPropagation();
 			const id = btn.dataset.delete;
-			await chrome.runtime.sendMessage({
-				type: "delete-bookmark",
-				bookmarkId: id,
-			});
-			showToast("Bookmark removed");
-			await renderBookmarks();
+			try {
+				await chrome.runtime.sendMessage({
+					type: "delete-bookmark",
+					bookmarkId: id,
+				});
+				showToast("Bookmark removed");
+				await renderBookmarks();
+			} catch (err) {
+				console.error("[PDB Popup] delete error:", err);
+				showToast("Failed to remove bookmark");
+			}
 		});
 	});
 }
