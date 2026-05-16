@@ -35,3 +35,44 @@ No build step required. Load unpacked in Chrome:
 ## Known Issues
 - Service worker may be terminated by Chrome between polling intervals on some systems; alarms re-wake it correctly
 - Readability extraction may strip meaningful content on single-page apps with dynamic rendering
+
+<!-- portfolio-context:start -->
+# Portfolio Context
+
+## What This Project Is
+
+PageDiffBookmark is a Chrome Manifest V3 extension that watches selected bookmarks for content changes, computes readable diffs between snapshots, and notifies the user when a page meaningfully changes. It is intentionally local and lightweight: vanilla JavaScript, bundled extraction/diff libraries, `chrome.storage.local`, and no backend service.
+
+## Current State
+
+Phase 2 complete — all planned phases shipped:
+- Phase 0: Extension scaffold, bookmark CRUD, content extraction (with service worker and error handling fixes)
+- Phase 1: Polling engine with background fetch, diff computation, and OS notifications
+- Phase 2: Diff viewer UI, per-bookmark polling controls, settings panel
+
+## Stack
+
+- **Runtime**: Chrome Extension Manifest V3
+- **Language**: Vanilla JS (ES2022) — no build step, no framework
+- **Diffing**: `diff-match-patch` v1.0.5 (Google) — bundled in `/lib/`
+- **Content extraction**: `@mozilla/readability` v0.5.0 — bundled in `/lib/`
+- **Storage**: `chrome.storage.local` — all data local, no sync
+- **Scheduling**: `chrome.alarms` API — MV3-compliant polling
+
+## How To Run
+
+No build step required. Load unpacked in Chrome:
+1. Open `chrome://extensions`
+2. Enable Developer mode
+3. Click "Load unpacked" and select the project root directory
+
+## Known Risks
+
+- Service worker may be terminated by Chrome between polling intervals on some systems; alarms re-wake it correctly
+- Readability extraction may strip meaningful content on single-page apps with dynamic rendering
+
+## Next Recommended Move
+
+Use this context plus the README and supporting docs to resume the next active task, then promote the repo beyond minimum-viable by capturing a dedicated handoff, roadmap, or discovery artifact.
+
+<!-- portfolio-context:end -->
