@@ -631,21 +631,9 @@ async function fetchAndExtract(url) {
 			}
 		} catch (parseErr) {
 			console.warn(
-				"[PDB] DOMParser/Readability failed, using regex fallback:",
+				"[PDB] DOMParser/Readability failed:",
 				parseErr,
 			);
-		}
-
-		// Final fallback: regex strip HTML tags
-		const stripped = html
-			.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-			.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-			.replace(/<[^>]+>/g, " ")
-			.replace(/\s+/g, " ")
-			.trim();
-
-		if (stripped.length > 0) {
-			return { title: "", textContent: stripped };
 		}
 
 		return null;
