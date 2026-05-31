@@ -36,6 +36,12 @@ PageDiffBookmark tracks pages you care about, polls them in the background, and 
 
 > **Status: Work in Progress** — Core tracking, diffing, and side panel functional. Cross-browser support not yet implemented.
 
+## Known Issues
+
+- Service worker may be terminated by Chrome between polling intervals on some systems; alarms re-wake it correctly
+- Readability extraction may strip meaningful content on single-page apps with dynamic rendering
+- `DEV_POLL_INTERVAL_MINUTES` is set to `1` in `background/service-worker.js` (overrides all per-bookmark configured intervals); set it to `0` before deploying to restore user-configured polling
+
 ## License
 
 MIT

@@ -25,7 +25,7 @@ No build step required. Load unpacked in Chrome:
 ## Architecture
 - `manifest.json` — MV3 manifest with service worker, alarms, notifications permissions
 - `background/` — service worker: polling scheduler, diff computation, notification dispatch
-- `content/` — content script: page text extraction via Readability before sending to background
+- `content/` — content script placeholder; extraction is injected at runtime via `chrome.scripting.executeScript({ func })` from the service worker (content-script.js is a stub)
 - `popup/` — bookmark management UI, change badge display
 - `side-panel/` — inline diff viewer with word-level change highlighting
 - `lib/` — bundled diff-match-patch and readability (no npm, no build step)
