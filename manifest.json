@@ -9,6 +9,7 @@
 		"notifications",
 		"contextMenus",
 		"sidePanel",
+		"offscreen",
 		"activeTab",
 		"scripting"
 	],

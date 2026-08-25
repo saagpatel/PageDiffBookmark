@@ -40,7 +40,18 @@ PageDiffBookmark tracks pages you care about, polls them in the background, and 
 
 - Service worker may be terminated by Chrome between polling intervals on some systems; alarms re-wake it correctly
 - Readability extraction may strip meaningful content on single-page apps with dynamic rendering
-- `DEV_POLL_INTERVAL_MINUTES` is set to `1` in `background/service-worker.js` (overrides all per-bookmark configured intervals); set it to `0` before deploying to restore user-configured polling
+- Automatic polling is deliberately unarmed by default; manual `check-now` is the qualified path until separate scheduling authority and recurrence proof exist
+
+## Living Research upgrade
+
+PageDiffBookmark now emits a portable, data-first `ResearchCapturePacketV1`
+for the KBFreshnessDetector manual research ledger. Packets retain stable source
+identity, content identity, capture provenance, warnings, and diff counts.
+Scheduling is unarmed by default (`automationArmed: false` and no development
+poll override); manual `check-now` remains available. See
+[`docs/LIVING_RESEARCH_ADAPTER.md`](docs/LIVING_RESEARCH_ADAPTER.md).
+The adapter records baselines, unchanged observations, material diffs, and
+failure states, while retaining only the latest 100 packets per source.
 
 ## License
 

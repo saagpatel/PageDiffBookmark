@@ -230,11 +230,15 @@ function attachHandlers() {
 			btn.disabled = true;
 			btn.textContent = "...";
 			try {
-				await chrome.runtime.sendMessage({
+				const response = await chrome.runtime.sendMessage({
 					type: "check-now",
 					bookmarkId: btn.dataset.check,
 				});
-				showToast("Check complete");
+				showToast(
+					response?.success
+						? "Check complete"
+						: response?.error || "Check failed",
+				);
 			} catch (err) {
 				console.error("[PDB Popup] check-now error:", err);
 			} finally {

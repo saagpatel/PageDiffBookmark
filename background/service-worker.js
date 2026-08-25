@@ -1,10 +1,10 @@
-/* global diff_match_patch, Readability */
+/* global diff_match_patch, ResearchCapture */
 
-importScripts("lib/diff-match-patch.js");
-importScripts("lib/Readability.js");
+importScripts("../lib/diff-match-patch.js");
+importScripts("research-capture.js");
 
 // ── Dev helpers (set to 0 for production) ──────────────────────────
-const DEV_POLL_INTERVAL_MINUTES = 1; // 0 = use bookmark's configured interval
+const DEV_POLL_INTERVAL_MINUTES = 0; // scheduling remains unarmed by default
 
 // ── Constants ──────────────────────────────────────────────────────
 const STORAGE_KEYS = {
@@ -13,6 +13,8 @@ const STORAGE_KEYS = {
 	snapshotPrefix: "pdb_snapshot_",
 	diffPrefix: "pdb_diff_",
 	activeDiffId: "pdb_active_diff_id",
+	researchPacketPrefix: "pdb_research_packet_",
+	researchHistoryPrefix: "pdb_research_history_",
 };
 
 const DEFAULT_SETTINGS = {
@@ -20,7 +22,45 @@ const DEFAULT_SETTINGS = {
 	notificationsEnabled: true,
 	badgeEnabled: true,
 	maxBookmarks: 100,
+	automationArmed: false,
 };
+
+const OFFSCREEN_DOCUMENT_PATH = "offscreen/parser.html";
+let offscreenCreating = null;
+const researchPacketWrites = new Map();
+
+function isAutomationArmed(settings) {
+	return settings?.automationArmed === true;
+}
+
+function normalizeSettings(value) {
+	const supplied =
+		value && typeof value === "object" && !Array.isArray(value) ? value : {};
+	return {
+		...DEFAULT_SETTINGS,
+		...supplied,
+		defaultPollIntervalHours: isValidPollInterval(
+			supplied.defaultPollIntervalHours,
+		)
+			? supplied.defaultPollIntervalHours
+			: DEFAULT_SETTINGS.defaultPollIntervalHours,
+		automationArmed: supplied.automationArmed === true,
+	};
+}
+
+function isValidPollInterval(hours) {
+	return typeof hours === "number" && Number.isFinite(hours) && hours > 0;
+}
+
+function hasCanonicalBookmark(bookmarks, targetUrl) {
+	return bookmarks.some((bookmark) => {
+		try {
+			return ResearchCapture.canonicalizeUrl(bookmark.url) === targetUrl;
+		} catch {
+			return false;
+		}
+	});
+}
 
 // ── Install handler ────────────────────────────────────────────────
 
@@ -29,11 +69,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 	const { [STORAGE_KEYS.settings]: existing } = await chrome.storage.local.get(
 		STORAGE_KEYS.settings,
 	);
-	if (!existing) {
-		await chrome.storage.local.set({
-			[STORAGE_KEYS.settings]: DEFAULT_SETTINGS,
-		});
-	}
+	const settings = normalizeSettings(existing);
+	await chrome.storage.local.set({
+		[STORAGE_KEYS.settings]: settings,
+	});
 
 	// Initialize bookmarks array if missing
 	const { [STORAGE_KEYS.bookmarks]: bookmarks } =
@@ -50,13 +89,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 		contexts: ["page"],
 	});
 
-	// Re-register alarms for all non-paused bookmarks (alarms don't survive SW restart)
-	const allBookmarks = bookmarks || [];
-	for (const bm of allBookmarks) {
-		if (!bm.paused) {
-			registerAlarm(bm.id, bm.pollIntervalHours);
-		}
-	}
+	await reconcilePollingAlarms(bookmarks || [], isAutomationArmed(settings));
 });
 
 // ── Context menu handler ───────────────────────────────────────────
@@ -100,9 +133,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	}
 
 	if (message.type === "check-now") {
-		pollBookmark(message.bookmarkId).then(() =>
-			sendResponse({ success: true }),
-		);
+		pollBookmark(message.bookmarkId).then((result) => {
+			if (result?.error) {
+				sendResponse({ success: false, error: result.error });
+				return;
+			}
+			sendResponse({ success: true, result });
+		});
+		return true;
+	}
+
+	if (message.type === "get-research-packets") {
+		getResearchPackets(message.bookmarkId).then(sendResponse);
 		return true;
 	}
 
@@ -160,16 +202,20 @@ async function trackPage(tab) {
 			return { success: false, error: "This page can't be tracked" };
 		}
 
-		// Check for duplicate URL
+		// Reject unsupported or credential-bearing locators before page extraction.
+		const requestedUrl = ResearchCapture.admitPublicSourceUrl(tab.url);
+
+		// Check for a duplicate canonical URL before doing extraction work.
 		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
 			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
-		if (bookmarks.some((b) => b.url === tab.url)) {
+		if (hasCanonicalBookmark(bookmarks, requestedUrl)) {
 			return { success: false, error: "Already tracking this page" };
 		}
 
 		// Check max bookmarks
-		const { [STORAGE_KEYS.settings]: settings = DEFAULT_SETTINGS } =
+		const { [STORAGE_KEYS.settings]: storedSettings = DEFAULT_SETTINGS } =
 			await chrome.storage.local.get(STORAGE_KEYS.settings);
+		const settings = normalizeSettings(storedSettings);
 		if (bookmarks.length >= settings.maxBookmarks) {
 			return {
 				success: false,
@@ -182,6 +228,12 @@ async function trackPage(tab) {
 		if (!extraction) {
 			return { success: false, error: "Failed to extract page content" };
 		}
+		const observedUrl = ResearchCapture.admitPublicSourceUrl(
+			extraction.url || requestedUrl,
+		);
+		if (hasCanonicalBookmark(bookmarks, observedUrl)) {
+			return { success: false, error: "Already tracking this page" };
+		}
 
 		// Create bookmark
 		const id = crypto.randomUUID();
@@ -190,7 +242,7 @@ async function trackPage(tab) {
 		/** @type {Bookmark} */
 		const bookmark = {
 			id,
-			url: tab.url,
+			url: observedUrl,
 			title: extraction.title || tab.title || "Untitled",
 			favicon: tab.favIconUrl || "",
 			addedAt: now,
@@ -200,6 +252,13 @@ async function trackPage(tab) {
 			paused: false,
 			hasUnreadDiff: false,
 			changeCount: 0,
+			sourceId: ResearchCapture.stableSourceId(observedUrl),
+			sourceKind: "html_document",
+			trust: "unknown",
+			freshness: {
+				max_age_hours: settings.defaultPollIntervalHours * 2,
+				expected_update_pattern: "operator_registered_web_source",
+			},
 		};
 
 		/** @type {Snapshot} */
@@ -209,16 +268,30 @@ async function trackPage(tab) {
 			capturedAt: now,
 			sentenceCount: countSentences(extraction.textContent),
 		};
+		const researchPacket = await ResearchCapture.createPacket({
+			bookmark,
+			status: "observed",
+			content: extraction.textContent,
+			observedAt: now,
+			responseStatus: null,
+			extractionMethod: "readability_tab_injection",
+		});
 
 		// Write to storage
 		bookmarks.push(bookmark);
 		await chrome.storage.local.set({
 			[STORAGE_KEYS.bookmarks]: bookmarks,
 			[`${STORAGE_KEYS.snapshotPrefix}${id}`]: snapshot,
+			[`${STORAGE_KEYS.researchPacketPrefix}${id}`]: researchPacket,
+			[`${STORAGE_KEYS.researchHistoryPrefix}${id}`]: [researchPacket],
 		});
 
 		// Register polling alarm
-		registerAlarm(id, bookmark.pollIntervalHours);
+		registerAlarm(
+			id,
+			bookmark.pollIntervalHours,
+			isAutomationArmed(settings),
+		);
 
 		return { success: true };
 	} catch (err) {
@@ -298,6 +371,10 @@ async function extractPageContent() {
  */
 async function deleteBookmark(bookmarkId) {
 	try {
+		const pendingPacketWrite = researchPacketWrites.get(bookmarkId);
+		if (pendingPacketWrite) {
+			await pendingPacketWrite.catch(() => undefined);
+		}
 		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
 			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
 		const filtered = bookmarks.filter((b) => b.id !== bookmarkId);
@@ -306,6 +383,8 @@ async function deleteBookmark(bookmarkId) {
 		await chrome.storage.local.remove([
 			`${STORAGE_KEYS.snapshotPrefix}${bookmarkId}`,
 			`${STORAGE_KEYS.diffPrefix}${bookmarkId}`,
+			`${STORAGE_KEYS.researchPacketPrefix}${bookmarkId}`,
+			`${STORAGE_KEYS.researchHistoryPrefix}${bookmarkId}`,
 		]);
 
 		// Clear polling alarm
@@ -365,7 +444,13 @@ async function resumeBookmark(bookmarkId) {
 
 		bookmark.paused = false;
 		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
-		registerAlarm(bookmarkId, bookmark.pollIntervalHours);
+		const { [STORAGE_KEYS.settings]: settings = DEFAULT_SETTINGS } =
+			await chrome.storage.local.get(STORAGE_KEYS.settings);
+		registerAlarm(
+			bookmarkId,
+			bookmark.pollIntervalHours,
+			isAutomationArmed(settings),
+		);
 		return { success: true };
 	} catch (err) {
 		console.error("[PDB] resumeBookmark error:", err);
@@ -380,6 +465,12 @@ async function resumeBookmark(bookmarkId) {
  */
 async function setPollInterval(bookmarkId, hours) {
 	try {
+		if (!isValidPollInterval(hours)) {
+			return {
+				success: false,
+				error: "Polling interval must be a positive finite number",
+			};
+		}
 		const { [STORAGE_KEYS.bookmarks]: bookmarks = [] } =
 			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
 		const bookmark = bookmarks.find((b) => b.id === bookmarkId);
@@ -388,9 +479,11 @@ async function setPollInterval(bookmarkId, hours) {
 		bookmark.pollIntervalHours = hours;
 		await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
 
-		if (!bookmark.paused) {
-			await chrome.alarms.clear(`poll_${bookmarkId}`);
-			registerAlarm(bookmarkId, hours);
+		const { [STORAGE_KEYS.settings]: settings = DEFAULT_SETTINGS } =
+			await chrome.storage.local.get(STORAGE_KEYS.settings);
+		await chrome.alarms.clear(`poll_${bookmarkId}`);
+		if (!bookmark.paused && isAutomationArmed(settings)) {
+			registerAlarm(bookmarkId, hours, true);
 		}
 		return { success: true };
 	} catch (err) {
@@ -441,13 +534,39 @@ async function markDiffRead(bookmarkId) {
  */
 async function updateSettings(newSettings) {
 	try {
+		if (
+			!newSettings ||
+			typeof newSettings !== "object" ||
+			Array.isArray(newSettings)
+		) {
+			return { success: false, error: "Settings must be an object" };
+		}
+		if (
+			Object.hasOwn(newSettings, "automationArmed") &&
+			typeof newSettings.automationArmed !== "boolean"
+		) {
+			return {
+				success: false,
+				error: "automationArmed must be a boolean",
+			};
+		}
+		if (
+			Object.hasOwn(newSettings, "defaultPollIntervalHours") &&
+			!isValidPollInterval(newSettings.defaultPollIntervalHours)
+		) {
+			return {
+				success: false,
+				error: "defaultPollIntervalHours must be a positive finite number",
+			};
+		}
 		const { [STORAGE_KEYS.settings]: current = DEFAULT_SETTINGS } =
 			await chrome.storage.local.get(STORAGE_KEYS.settings);
-		const merged = { ...current, ...newSettings };
+		const merged = normalizeSettings({ ...current, ...newSettings });
 		await chrome.storage.local.set({ [STORAGE_KEYS.settings]: merged });
 
-		// Reapply badge visibility
 		const bookmarks = await getBookmarks();
+		await reconcilePollingAlarms(bookmarks, isAutomationArmed(merged));
+		// Reapply badge visibility.
 		await updateBadge(bookmarks);
 		return { success: true };
 	} catch (err) {
@@ -463,7 +582,9 @@ async function updateSettings(newSettings) {
  * @param {string} bookmarkId
  * @param {number} pollIntervalHours
  */
-function registerAlarm(bookmarkId, pollIntervalHours) {
+function registerAlarm(bookmarkId, pollIntervalHours, automationArmed = false) {
+	if (automationArmed !== true) return;
+	if (!isValidPollInterval(pollIntervalHours)) return;
 	const periodInMinutes =
 		DEV_POLL_INTERVAL_MINUTES > 0
 			? DEV_POLL_INTERVAL_MINUTES
@@ -474,11 +595,32 @@ function registerAlarm(bookmarkId, pollIntervalHours) {
 	});
 }
 
+async function reconcilePollingAlarms(bookmarks, automationArmed) {
+	const alarms = await chrome.alarms.getAll();
+	await Promise.all(
+		alarms
+			.filter((alarm) => alarm.name.startsWith("poll_"))
+			.map((alarm) => chrome.alarms.clear(alarm.name)),
+	);
+	if (automationArmed !== true) return;
+	for (const bookmark of bookmarks) {
+		if (!bookmark.paused) {
+			registerAlarm(bookmark.id, bookmark.pollIntervalHours, true);
+		}
+	}
+}
+
 /**
  * Alarm handler — routes poll alarms to the poll cycle.
  */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
 	if (!alarm.name.startsWith("poll_")) return;
+	const { [STORAGE_KEYS.settings]: settings = DEFAULT_SETTINGS } =
+		await chrome.storage.local.get(STORAGE_KEYS.settings);
+	if (!isAutomationArmed(settings)) {
+		await chrome.alarms.clear(alarm.name);
+		return;
+	}
 	const bookmarkId = alarm.name.slice(5); // strip "poll_"
 	await pollBookmark(bookmarkId);
 });
@@ -493,6 +635,16 @@ async function pollBookmark(bookmarkId) {
 			await chrome.storage.local.get(STORAGE_KEYS.bookmarks);
 		const bookmark = bookmarks.find((b) => b.id === bookmarkId);
 		if (!bookmark || bookmark.paused) return;
+		let admittedUrl;
+		try {
+			admittedUrl = ResearchCapture.admitPublicSourceUrl(bookmark.url);
+		} catch {
+			await chrome.alarms.clear(`poll_${bookmarkId}`);
+			return {
+				error:
+					"Stored source locator failed public polling admission; re-register the source",
+			};
+		}
 
 		const snapshotKey = `${STORAGE_KEYS.snapshotPrefix}${bookmarkId}`;
 		const { [snapshotKey]: storedSnapshot } =
@@ -500,17 +652,29 @@ async function pollBookmark(bookmarkId) {
 		if (!storedSnapshot) return;
 
 		// Fetch and extract current page content
-		const extraction = await fetchAndExtract(bookmark.url);
+		const extraction = await fetchAndExtract(admittedUrl);
 		const now = Date.now();
 
 		// Always update lastChecked
 		bookmark.lastChecked = now;
 
-		if (!extraction) {
-			// Fetch failed — just update lastChecked, don't fire notification
-			console.warn(`[PDB] Poll failed for "${bookmark.title}" — fetch error`);
+		if (!extraction?.ok) {
+			const researchPacket = await ResearchCapture.createPacket({
+				bookmark,
+				status: extraction?.status || "inaccessible",
+				content: null,
+				observedAt: now,
+				responseStatus: extraction?.responseStatus ?? null,
+				retryAfterSeconds: extraction?.retryAfterSeconds ?? null,
+				extractionWarnings: extraction?.warnings || ["fetch_error"],
+				extractionMethod: "readability_service_worker",
+			});
+			console.warn(
+				`[PDB] Poll failed for "${bookmark.title}" — ${researchPacket.status}`,
+			);
 			await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
-			return;
+			await persistResearchPacket(bookmarkId, researchPacket);
+			return { researchPacket };
 		}
 
 		// Auth wall detection: if new content is <20% of stored sentence count, skip
@@ -519,12 +683,22 @@ async function pollBookmark(bookmarkId) {
 			storedSnapshot.sentenceCount > 10 &&
 			newSentenceCount < storedSnapshot.sentenceCount * 0.2
 		) {
+			const researchPacket = await ResearchCapture.createPacket({
+				bookmark,
+				status: "inaccessible",
+				content: null,
+				observedAt: now,
+				responseStatus: extraction.responseStatus,
+				extractionWarnings: ["suspected_auth_wall"],
+				extractionMethod: "readability_service_worker",
+			});
 			console.warn(
 				`[PDB] Suspected auth wall for "${bookmark.title}" — ` +
 					`${newSentenceCount} vs ${storedSnapshot.sentenceCount} sentences, skipping`,
 			);
 			await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
-			return;
+			await persistResearchPacket(bookmarkId, researchPacket);
+			return { researchPacket };
 		}
 
 		// Compute diff
@@ -536,8 +710,17 @@ async function pollBookmark(bookmarkId) {
 		if (!diffResult) {
 			// No changes detected
 			console.log(`[PDB] No change detected for "${bookmark.title}"`);
+			const researchPacket = await ResearchCapture.createPacket({
+				bookmark,
+				status: "observed",
+				content: extraction.textContent,
+				observedAt: now,
+				responseStatus: extraction.responseStatus,
+				extractionMethod: "readability_service_worker",
+			});
 			await chrome.storage.local.set({ [STORAGE_KEYS.bookmarks]: bookmarks });
-			return;
+			await persistResearchPacket(bookmarkId, researchPacket);
+			return { researchPacket };
 		}
 
 		// Change detected — update everything
@@ -567,11 +750,21 @@ async function pollBookmark(bookmarkId) {
 			currentSentenceCount: newSentenceCount,
 		};
 
+		const researchPacket = await ResearchCapture.createPacket({
+			bookmark,
+			status: "observed",
+			content: extraction.textContent,
+			observedAt: now,
+			responseStatus: extraction.responseStatus,
+			extractionMethod: "readability_service_worker",
+			diff: diffResult,
+		});
 		await chrome.storage.local.set({
 			[STORAGE_KEYS.bookmarks]: bookmarks,
 			[snapshotKey]: newSnapshot,
 			[`${STORAGE_KEYS.diffPrefix}${bookmarkId}`]: diffRecord,
 		});
+		await persistResearchPacket(bookmarkId, researchPacket);
 
 		await updateBadge(bookmarks);
 
@@ -581,16 +774,54 @@ async function pollBookmark(bookmarkId) {
 		if (settings.notificationsEnabled) {
 			await sendChangeNotification(bookmark, diffResult);
 		}
+		return { researchPacket };
 	} catch (err) {
 		console.error(`[PDB] pollBookmark error for ${bookmarkId}:`, err);
+		return { error: err instanceof Error ? err.message : String(err) };
 	}
 }
 
+async function persistResearchPacket(bookmarkId, researchPacket) {
+	const previousWrite = researchPacketWrites.get(bookmarkId) || Promise.resolve();
+	const currentWrite = previousWrite.catch(() => undefined).then(async () => {
+		const currentKey = `${STORAGE_KEYS.researchPacketPrefix}${bookmarkId}`;
+		const historyKey = `${STORAGE_KEYS.researchHistoryPrefix}${bookmarkId}`;
+		const { [historyKey]: packetHistory = [] } =
+			await chrome.storage.local.get(historyKey);
+		const boundedHistory = ResearchCapture.appendToHistory(
+			packetHistory,
+			researchPacket,
+		);
+		await chrome.storage.local.set({
+			[currentKey]: researchPacket,
+			[historyKey]: boundedHistory,
+		});
+	});
+	researchPacketWrites.set(bookmarkId, currentWrite);
+	try {
+		await currentWrite;
+	} finally {
+		if (researchPacketWrites.get(bookmarkId) === currentWrite) {
+			researchPacketWrites.delete(bookmarkId);
+		}
+	}
+}
+
+async function getResearchPackets(bookmarkId) {
+	const currentKey = `${STORAGE_KEYS.researchPacketPrefix}${bookmarkId}`;
+	const historyKey = `${STORAGE_KEYS.researchHistoryPrefix}${bookmarkId}`;
+	const values = await chrome.storage.local.get([currentKey, historyKey]);
+	return {
+		current: values[currentKey] || null,
+		history: values[historyKey] || [],
+	};
+}
+
 /**
- * Fetch a URL and extract text content using DOMParser + Readability.
- * Runs entirely in the service worker — no tab needed.
+ * Fetch a URL in the service worker and parse it in an offscreen DOM document.
+ * No visible browser tab is needed.
  * @param {string} url
- * @returns {Promise<{title: string, textContent: string} | null>}
+ * @returns {Promise<object>}
  */
 async function fetchAndExtract(url) {
 	try {
@@ -604,47 +835,99 @@ async function fetchAndExtract(url) {
 
 		if (!resp.ok) {
 			console.warn(`[PDB] Fetch returned ${resp.status} for ${url}`);
-			return null;
+			const retryAfter = resp.headers.get("retry-after");
+			const parsedRetryAfter = retryAfter ? Number.parseInt(retryAfter, 10) : NaN;
+			return {
+				ok: false,
+				status:
+					resp.status === 429
+						? "rate_limited"
+						: resp.status === 404 || resp.status === 410
+							? "deleted"
+							: "inaccessible",
+				responseStatus: resp.status,
+				retryAfterSeconds: Number.isFinite(parsedRetryAfter)
+					? parsedRetryAfter
+					: null,
+				warnings: [`http_${resp.status}`],
+			};
 		}
 
 		const html = await resp.text();
+		const parsed = await parseHtmlOffscreen(html, url);
 
-		// Try DOMParser + Readability
-		try {
-			const doc = new DOMParser().parseFromString(html, "text/html");
-			const reader = new Readability(doc);
-			const article = reader.parse();
-
-			if (article?.textContent?.trim().length > 0) {
-				return {
-					title: article.title || "",
-					textContent: article.textContent.trim(),
-				};
-			}
-
-			// Readability returned empty — fall back to body text
-			if (doc.body?.textContent?.trim().length > 0) {
-				return {
-					title: doc.title || "",
-					textContent: doc.body.textContent.trim(),
-				};
-			}
-		} catch (parseErr) {
-			console.warn(
-				"[PDB] DOMParser/Readability failed:",
-				parseErr,
-			);
+		if (parsed?.textContent?.trim().length > 0) {
+			return {
+				ok: true,
+				title: parsed.title || "",
+				textContent: parsed.textContent.trim(),
+				responseStatus: resp.status,
+			};
 		}
 
-		return null;
+		return {
+			ok: false,
+			status: "malformed",
+			responseStatus: resp.status,
+			retryAfterSeconds: null,
+			warnings: ["extraction_empty"],
+		};
 	} catch (err) {
 		if (err.name === "AbortError") {
 			console.warn(`[PDB] Fetch timeout for ${url}`);
 		} else {
 			console.error(`[PDB] fetchAndExtract error for ${url}:`, err);
 		}
-		return null;
+		return {
+			ok: false,
+			status: "inaccessible",
+			responseStatus: null,
+			retryAfterSeconds: null,
+			warnings: [err.name === "AbortError" ? "fetch_timeout" : "fetch_error"],
+		};
 	}
+}
+
+async function hasOffscreenDocument() {
+	if (chrome.runtime.getContexts) {
+		const contexts = await chrome.runtime.getContexts({
+			contextTypes: ["OFFSCREEN_DOCUMENT"],
+			documentUrls: [chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)],
+		});
+		return contexts.length > 0;
+	}
+	return chrome.offscreen.hasDocument();
+}
+
+async function ensureOffscreenDocument() {
+	if (await hasOffscreenDocument()) return;
+	if (!offscreenCreating) {
+		offscreenCreating = chrome.offscreen
+			.createDocument({
+				url: OFFSCREEN_DOCUMENT_PATH,
+				reasons: ["DOM_PARSER"],
+				justification:
+					"Parse fetched source HTML for reviewable change detection.",
+			})
+			.finally(() => {
+				offscreenCreating = null;
+			});
+	}
+	await offscreenCreating;
+}
+
+async function parseHtmlOffscreen(html, url) {
+	await ensureOffscreenDocument();
+	const result = await chrome.runtime.sendMessage({
+		type: "parse-fetched-html",
+		target: "offscreen-parser",
+		html,
+		url,
+	});
+	if (!result?.success) {
+		throw new Error(result?.error || "Offscreen HTML extraction failed");
+	}
+	return result;
 }
 
 /**
